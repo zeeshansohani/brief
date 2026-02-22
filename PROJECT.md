@@ -1,13 +1,13 @@
-# Brief — Cursor Project Brief
-## AI-Powered Daily Economic Intelligence, Delivered as a PDF to Your Inbox
+# Brief — Cursor Project Brief v2
+## AI-Powered Daily Economic Intelligence, Delivered as a Multi-Page PDF to Your Inbox
 
 ---
 
 ## What We're Building
 
-**Brief** is a web app where users subscribe with their email and receive a beautifully designed PDF report every morning. The report contains the day's most important U.S. economic data releases, top financial news headlines, and concise 2–3 line AI-generated insights for each item — all formatted as a branded, professional PDF attached to an email.
+**Brief** is a web app where users subscribe with their email and receive a beautifully designed, multi-page PDF report every morning. The report reads like a professional financial intelligence briefing — with executive summary, deep economic data analysis with historical trends, market impact analysis, top stocks to watch, and curated news — all powered by real Federal Reserve data and AI-generated insights.
 
-The goal: make economic data digestible for everyday investors and professionals.
+The goal: a Bloomberg-lite morning briefing that makes institutional-grade economic intelligence accessible to everyday investors.
 
 ---
 
@@ -15,28 +15,22 @@ The goal: make economic data digestible for everyday investors and professionals
 
 | Layer | Choice |
 |---|---|
-| Framework | Next.js 14 (App Router) |
+| Framework | Next.js (App Router, TypeScript) |
 | Styling | Tailwind CSS |
-| PDF Generation | Puppeteer (renders HTML/CSS → PDF) |
-| Email Delivery | Resend (resend.com — free tier, easy API) |
-| AI Insights | OpenAI API (GPT-4o-mini for cost efficiency) |
-| Economic Data | FRED API (Federal Reserve — free, official U.S. data) |
-| News | NewsAPI.org (free tier) |
-| Scheduling | Vercel Cron Jobs (runs the pipeline every morning at 7AM ET) |
-| Database | Supabase (Postgres — free tier, store subscriber emails) |
+| PDF Generation | Puppeteer (renders HTML/CSS → PDF, inline CSS only) |
+| Email Delivery | Resend (resend.com) |
+| AI Insights | OpenAI API (GPT-4o-mini) |
+| Economic Data | FRED API (Federal Reserve) |
+| Historical Trends | FRED API (10 observations per series) |
+| News | NewsAPI.org |
+| Scheduling | Vercel Cron Jobs (7AM ET daily) |
+| Database | Supabase (Postgres, subscriber emails) |
 | Deployment | Vercel |
 
 ---
 
-## API Keys Needed (set up before starting)
+## API Keys (.env.local)
 
-1. **OpenAI** — platform.openai.com
-2. **FRED API** — fred.stlouisfed.org/docs/api/api_key.html (free, instant)
-3. **Resend** — resend.com (free tier: 3,000 emails/month)
-4. **NewsAPI** — newsapi.org (free tier)
-5. **Supabase** — supabase.com (free tier, for email storage)
-
-All keys go in `.env.local`:
 ```
 OPENAI_API_KEY=
 FRED_API_KEY=
@@ -49,169 +43,341 @@ CRON_SECRET=
 
 ---
 
-## Project Structure
+## Updated Project Structure
 
 ```
 brief/
 ├── app/
-│   ├── page.tsx                  # Landing page with email signup form
+│   ├── page.tsx
 │   ├── api/
-│   │   ├── subscribe/route.ts    # POST: save email to Supabase
-│   │   └── send-brief/route.ts   # GET: cron-triggered pipeline endpoint
+│   │   ├── subscribe/route.ts
+│   │   ├── send-brief/route.ts
+│   │   └── test-pdf/route.ts         # dev only
 ├── lib/
-│   ├── fetchEconomicData.ts      # Fetches FRED data releases for today
-│   ├── fetchNews.ts              # Fetches top financial news from NewsAPI
-│   ├── generateInsights.ts       # Sends data to OpenAI, returns AI insights
-│   ├── generatePDF.ts            # Renders HTML report → PDF buffer via Puppeteer
-│   ├── sendEmail.ts              # Sends PDF as attachment via Resend
-│   └── supabase.ts               # Supabase client setup
+│   ├── fetchEconomicData.ts          # Latest + 10-month history per series
+│   ├── fetchNews.ts                  # Top 5 financial headlines
+│   ├── generateInsights.ts           # Full AI analysis (all sections)
+│   ├── generatePDF.ts                # Puppeteer PDF renderer
+│   ├── sendEmail.ts                  # Resend email with PDF attachment
+│   └── supabase.ts
 ├── templates/
-│   └── reportTemplate.ts         # HTML/CSS template for the PDF report
-├── vercel.json                   # Cron job config
+│   └── reportTemplate.ts            # Multi-page HTML/CSS template
+├── vercel.json
 └── .env.local
 ```
 
 ---
 
-## Full Pipeline (What Happens Every Morning at 7AM ET)
+## Data Pipeline (What Happens Every Morning at 7AM ET)
 
-The Vercel Cron job hits `GET /api/send-brief` which executes this sequence:
+### Step 1 — Fetch Economic Data + History (FRED API)
 
-### Step 1 — Fetch Economic Data (FRED API)
-- Query FRED for **releases scheduled today** using the `/releases/dates` endpoint
-- For each release, fetch the **latest observation value** (e.g., GDP = 2.8%, CPI = 3.1%)
-- Target series to always include if released today:
-  - GDP (series: `GDP`)
-  - CPI — Inflation (`CPIAUCSL`)
-  - Unemployment Rate (`UNRATE`)
-  - Federal Funds Rate (`FEDFUNDS`)
-  - Retail Sales (`RSAFS`)
-  - Consumer Confidence (`UMCSENT`)
-- If none of these released today, fetch their **most recent values** as context
+For each of these 6 series, fetch:
+- **Latest observation** (current value)
+- **Previous observation** (1 period ago, for change calculation)
+- **Last 10 observations** (for trend table)
 
-### Step 2 — Fetch Financial News (NewsAPI)
-- Query NewsAPI for top 5 financial/economic headlines from the past 24 hours
-- Search query: `"economy" OR "Federal Reserve" OR "inflation" OR "stock market" OR "GDP"`
-- Extract: headline, source, and URL
+Target series:
+- GDP (`GDP`) — quarterly
+- CPI Inflation (`CPIAUCSL`) — monthly
+- Unemployment Rate (`UNRATE`) — monthly
+- Federal Funds Rate (`FEDFUNDS`) — monthly
+- Retail Sales (`RSAFS`) — monthly
+- Consumer Confidence (`UMCSENT`) — monthly
 
-### Step 3 — Generate AI Insights (OpenAI)
-- For each FRED data point and each news headline, send to GPT-4o-mini
-- System prompt: *"You are a concise financial analyst. For each economic data point or news item provided, write exactly 2-3 sentences explaining what this means for everyday investors and the broader economy. Use plain English, no jargon."*
-- Return structured JSON: `{ item: string, value: string, insight: string }[]`
+For each series, compute:
+- `currentValue` — latest observation
+- `previousValue` — one period prior
+- `change` — absolute difference
+- `changePct` — percentage change
+- `trend` — array of `{ date, value }` for last 10 periods
+- `direction` — "up" | "down" | "flat"
 
-### Step 4 — Generate PDF (Puppeteer)
-- Build an HTML string using the report template (see Template section below)
-- Launch Puppeteer headless browser, load the HTML, export as PDF buffer
-- Paper size: Letter (8.5" x 11"), margins: 1 inch
+### Step 2 — Fetch News (NewsAPI.org)
 
-### Step 5 — Send Email (Resend)
-- Fetch all subscriber emails from Supabase
-- For each subscriber, send via Resend:
-  - Subject: `"Your Brief — [Day, Month Date]"`
-  - Body: short plain text — "Good morning. Your daily economic brief is attached."
-  - Attachment: the PDF buffer, filename `brief-[date].pdf`
+- Top 5 headlines: query `economy OR "Federal Reserve" OR inflation OR "stock market" OR GDP`
+- Past 24 hours, English, sorted by publishedAt
+- Extract: `headline`, `source`, `url`, `publishedAt`
 
----
+### Step 3 — Generate Full AI Analysis (OpenAI, single batched call)
 
-## PDF Report Template Design
+Send ALL data in one GPT-4o-mini call. Request structured JSON with these sections:
 
-The HTML template should produce a clean, professional, newspaper-style PDF. Design spec:
-
-**Header:**
-- Logo/wordmark: "Brief" in bold serif font (Georgia or similar), large
-- Tagline: "Your daily economic intelligence" in small grey italic
-- Date: right-aligned, e.g., "Saturday, February 22, 2026"
-- Thin horizontal rule below header
-
-**Section 1: Economic Data Releases**
-- Section title: "TODAY'S ECONOMIC DATA" in small caps, with rule below
-- For each data point:
-  - Indicator name (bold): e.g., "GDP Growth Rate"
-  - Value (large, colored — green if positive/expected, amber if miss): e.g., "2.8%"
-  - AI Insight (regular weight, grey): 2-3 sentences
-
-**Section 2: Market News**
-- Section title: "MARKET HEADLINES" in small caps
-- For each headline:
-  - Headline text (bold)
-  - Source (small, grey)
-  - AI Insight (regular, grey)
-
-**Footer:**
-- "Brief — Unsubscribe" (small, centered, grey)
-- "Data sourced from Federal Reserve (FRED) and NewsAPI"
-
-Use a clean color palette: white background, near-black text (#1a1a1a), accent color #2563eb (blue) for values and section headers.
-
----
-
-## Landing Page (app/page.tsx)
-
-Simple, minimal, high-quality. Single page with:
-
-- Large centered headline: **"Markets move on data. Be ready."**
-- Subheadline: "Brief delivers a daily AI-powered PDF digest of the most important economic data and market news — straight to your inbox, every morning."
-- Email input + "Subscribe for free" button (calls `/api/subscribe`)
-- On success: show "You're subscribed. Your first Brief arrives tomorrow morning."
-- Below fold: 3 feature cards:
-  - "Real Economic Data" — sourced directly from the Federal Reserve
-  - "AI Insights" — plain-English explanations of what the numbers mean
-  - "PDF Delivered Daily" — a clean report in your inbox every morning
-- Very bottom: small sample/preview of what the PDF looks like (can be a static screenshot)
-
-Styling: dark background (#0f172a), white text, blue accents. Minimal, confident, fintech aesthetic.
-
----
-
-## Supabase Setup
-
-Create one table:
-
-```sql
-CREATE TABLE subscribers (
-  id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
-  email text UNIQUE NOT NULL,
-  subscribed_at timestamptz DEFAULT now(),
-  active boolean DEFAULT true
-);
-```
-
-The `/api/subscribe` route does a simple upsert into this table.
-
----
-
-## Vercel Cron Configuration (vercel.json)
-
-```json
+```typescript
 {
-  "crons": [
-    {
-      "path": "/api/send-brief",
-      "schedule": "0 11 * * *"
-    }
-  ]
+  executiveSummary: string,          // 4-5 sentence macro overview of today's economic picture
+  economicInsights: {
+    item: string,
+    currentValue: string,
+    insight: string,                 // 2-3 sentences: what this number means
+    trendAnalysis: string,           // 1-2 sentences: what the 10-month trend shows
+    marketImplication: string        // 1-2 sentences: direct market impact
+  }[],
+  marketImpact: {
+    overallOutlook: string,          // 3-4 sentences: combined effect of all data on markets
+    sectorsToWatch: {
+      sector: string,                // e.g. "Financial Services", "Real Estate"
+      reasoning: string,             // 1-2 sentences why this sector is affected
+      direction: "positive" | "negative" | "neutral"
+    }[],                             // 4-5 sectors
+    stocksToWatch: {
+      ticker: string,                // e.g. "JPM", "WMT"
+      company: string,               // full name
+      reasoning: string,             // 1-2 sentences
+      direction: "positive" | "negative" | "neutral"
+    }[]                              // 5-6 stocks
+  },
+  newsInsights: {
+    headline: string,
+    source: string,
+    url: string,
+    insight: string                  // 2-3 sentences
+  }[]
 }
 ```
 
-`0 11 * * *` = 11:00 UTC = 7:00 AM ET. Protect this endpoint with a `CRON_SECRET` header check so only Vercel can trigger it.
+System prompt:
+*"You are a senior financial analyst writing a morning briefing for sophisticated investors. Be precise, data-driven, and actionable. Reference specific values. No filler, no generic statements. Every insight must be grounded in the actual data provided."*
+
+### Step 4 — Generate Multi-Page PDF (Puppeteer)
+
+See PDF Template Design section below.
+
+### Step 5 — Send Email (Resend)
+
+- Fetch all active subscribers from Supabase
+- Subject: `"Your Brief — [Day, Month Date, Year]"`
+- Body: "Good morning. Your daily economic intelligence briefing is attached."
+- Attachment: PDF buffer, filename `brief-[YYYY-MM-DD].pdf`
 
 ---
 
-## Build Order for Cursor
+## PDF Template Design — 5 Pages
 
-Build in this exact sequence to avoid dependency issues:
+**ALL CSS must be inline. No external stylesheets. No web fonts (use Georgia, Arial, serif, sans-serif system fonts only). Puppeteer cannot load external resources.**
 
-1. **Init project** — `npx create-next-app@latest brief --typescript --tailwind --app`
-2. **Install dependencies** — `npm install @supabase/supabase-js resend openai puppeteer newsapi axios`
-3. **Supabase setup** — create `lib/supabase.ts`, create the subscribers table
-4. **Subscribe API** — build `app/api/subscribe/route.ts` and test with Postman
-5. **Landing page** — build `app/page.tsx` with email form wired to subscribe API
-6. **FRED fetcher** — build `lib/fetchEconomicData.ts`, test it logs real data
-7. **News fetcher** — build `lib/fetchNews.ts`, test it returns headlines
-8. **AI insights** — build `lib/generateInsights.ts`, test it returns structured JSON
-9. **PDF template** — build `templates/reportTemplate.ts` with full HTML/CSS
-10. **PDF generator** — build `lib/generatePDF.ts` using Puppeteer, test it saves a PDF locally
-11. **Email sender** — build `lib/sendEmail.ts` with Resend, test with your own email
-12. **Pipeline route** — wire everything together in `app/api/send-brief/route.ts`
-13. **Cron config** — add `vercel.json`, deploy to Vercel, test cron manually
-14. **Polish** — landing page design, PDF styling, error handling
+Color palette:
+- Background: `#ffffff`
+- Primary text: `#1a1a1a`
+- Secondary text: `#6b7280`
+- Accent blue: `#2563eb`
+- Success green: `#16a34a`
+- Warning amber: `#d97706`
+- Danger red: `#dc2626`
+- Border: `#e5e7eb`
+- Header bg: `#0f172a`
+
+---
+
+### PAGE 1 — Cover & Executive Summary
+
+**Header (dark navy background #0f172a):**
+- "BRIEF" wordmark left-aligned, white, bold, Georgia serif, 36px
+- Tagline: "Daily Economic Intelligence" right-aligned, white, 12px, letter-spacing
+- Full-width, padding 24px
+
+**Date bar:**
+- Full-width light grey bar (#f8fafc)
+- Left: "MORNING EDITION" in small caps, grey
+- Right: Full date e.g. "Sunday, February 22, 2026"
+- Border bottom
+
+**Executive Summary section:**
+- Section label: "TODAY'S MACRO PICTURE" — small caps, blue, 11px, letter-spacing 2px
+- Horizontal rule below label
+- AI-generated `executiveSummary` text — 16px, line-height 1.8, comfortable reading width
+- Well-padded, generous whitespace
+
+**Key Numbers Bar:**
+- 3-column grid showing most important metrics at a glance:
+  - CPI (inflation) with value and up/down arrow
+  - Unemployment Rate with value and direction
+  - Federal Funds Rate with value and direction
+- Each cell: label small grey, value large bold colored (green=good, red=bad, amber=neutral)
+- Border between cells
+
+**Page footer (all pages):**
+- Left: "Brief — Daily Economic Intelligence"
+- Right: "Data: Federal Reserve FRED | AI: GPT-4o-mini | [date]"
+- Small grey, border top, 10px font
+
+---
+
+### PAGE 2 — Economic Data Deep Dive
+
+**Section header:** "ECONOMIC DATA" — full-width dark bar, white text
+
+**For each of the 6 indicators, a card-style row:**
+
+```
+[INDICATOR NAME — bold, 14px]          [CURRENT VALUE — 28px, bold, colored]
+[Date of reading — grey, 11px]         [▲ +X.X% from previous — green/red, 12px]
+
+[AI Insight — 13px, #374151, 2-3 sentences]
+[Trend Analysis — 13px, grey italic]
+[Market Implication — 13px, #2563eb]
+
+[10-MONTH TREND TABLE]
+Date     | Value  | Change
+---------|--------|-------
+Jan 2026 | 326.6  | +0.3%
+Dec 2025 | 326.3  | +0.2%
+... (10 rows)
+
+[Source: Federal Reserve FRED, Series: CPIAUCSL]
+```
+
+Divider line between each indicator. Alternate very light grey background (#fafafa) on every other card for readability.
+
+---
+
+### PAGE 3 — Market Impact Analysis
+
+**Section header:** "MARKET IMPACT" — full-width dark bar, white text
+
+**Overall Market Outlook:**
+- Label: "OUTLOOK" small caps blue
+- `marketImpact.overallOutlook` — paragraph, 14px, generous line height
+
+**Sectors to Watch:**
+- Label: "SECTORS TO WATCH" small caps blue, rule below
+- 2-column grid of sector cards:
+  - Sector name bold
+  - Direction indicator: ▲ Positive / ▼ Negative / → Neutral (colored)
+  - Reasoning text grey
+
+**Stocks to Watch:**
+- Label: "STOCKS TO WATCH" small caps blue, rule below
+- Table layout:
+```
+TICKER  | COMPANY          | OUTLOOK   | REASONING
+--------|------------------|-----------|----------
+JPM     | JPMorgan Chase   | ▲ Positive | Higher rates...
+WMT     | Walmart          | ▲ Positive | Strong retail...
+```
+- Ticker bold blue, alternating row backgrounds
+
+**Disclaimer (small, grey, bottom of page):**
+- "This is not financial advice. Stock mentions are AI-generated based on economic data patterns and are for informational purposes only. Always conduct your own research."
+
+---
+
+### PAGE 4 — Market News
+
+**Section header:** "MARKET NEWS" — full-width dark bar, white text
+
+**For each of 5 headlines:**
+```
+[SOURCE — small caps grey]    [DATE — grey right-aligned]
+[HEADLINE — bold, 15px, #1a1a1a]
+[AI INSIGHT — 13px, #374151, 2-3 sentences]
+[Read more: URL — small blue, underline]
+
+[thin divider]
+```
+
+Generous spacing between articles. Clean newspaper-editorial feel.
+
+---
+
+### PAGE 5 — Appendix & Citations
+
+**Section header:** "DATA SOURCES & METHODOLOGY" — full-width dark bar, white text
+
+**Data Sources table:**
+```
+INDICATOR          | SERIES ID  | SOURCE                        | FREQUENCY | RETRIEVED
+-------------------|------------|-------------------------------|-----------|----------
+GDP                | GDP        | Federal Reserve Bank St. Louis | Quarterly | [date]
+CPI — Inflation    | CPIAUCSL   | Federal Reserve Bank St. Louis | Monthly   | [date]
+Unemployment Rate  | UNRATE     | Federal Reserve Bank St. Louis | Monthly   | [date]
+Federal Funds Rate | FEDFUNDS   | Federal Reserve Bank St. Louis | Monthly   | [date]
+Retail Sales       | RSAFS      | Federal Reserve Bank St. Louis | Monthly   | [date]
+Consumer Confidence| UMCSENT    | U. of Michigan                | Monthly   | [date]
+```
+
+**Methodology note:**
+- "Economic data is retrieved directly from the Federal Reserve Economic Data (FRED) API maintained by the Federal Reserve Bank of St. Louis. AI insights are generated using OpenAI's GPT-4o-mini model. News headlines are sourced from NewsAPI.org. This report is generated automatically at 7:00 AM ET each trading day."
+
+**AI Disclosure:**
+- "Insights and market analysis in this report are generated by artificial intelligence and should not be construed as financial advice. Past economic trends are not indicative of future market performance."
+
+**Brief branding:**
+- Brief logo/wordmark centered
+- "brief.zeeshansohani.com" (or your deployed URL)
+- "© 2026 Brief. For informational purposes only."
+
+---
+
+## Updated fetchEconomicData.ts
+
+Fetch 10 observations per series (not just 1):
+
+```typescript
+// For each series, fetch 10 observations sorted desc
+GET /fred/series/observations?series_id=CPIAUCSL&sort_order=desc&limit=10&api_key=...
+
+// Return type:
+interface EconomicSeries {
+  seriesId: string
+  item: string              // human name
+  currentValue: string
+  previousValue: string
+  change: string            // formatted e.g. "+0.3"
+  changePct: string         // formatted e.g. "+0.09%"
+  direction: 'up' | 'down' | 'flat'
+  date: string              // date of latest reading
+  trend: { date: string; value: string }[]  // 10 items, oldest first
+  unit: string              // e.g. "Billions of Dollars", "Percent", "Index"
+  frequency: string         // "Monthly", "Quarterly"
+  source: string            // "Federal Reserve FRED"
+}
+```
+
+---
+
+## Number Formatting
+
+Format all FRED values properly before display:
+- GDP `31490.07` → `$31,490.1B`
+- CPI `326.588` → `326.6 (Index)`
+- Unemployment `4.3` → `4.3%`
+- Fed Funds `3.64` → `3.64%`
+- Retail Sales `734967.0` → `$734,967M`
+- Consumer Confidence `56.4` → `56.4 / 100`
+
+---
+
+## Puppeteer Critical Notes
+
+- **Inline CSS ONLY** — no `<link>` tags, no `@import`, no external fonts
+- Use `page.setContent(html, { waitUntil: 'networkidle0' })` not `page.goto()`
+- PDF options: `{ format: 'Letter', margin: { top: '0.75in', right: '0.75in', bottom: '0.75in', left: '0.75in' }, printBackground: true }`
+- Page breaks: use `style="page-break-before: always"` on each new page div
+- Local dev: `puppeteer` full package
+- Vercel production: `puppeteer-core` + `@sparticuz/chromium`
+
+---
+
+## What's Already Built (Do Not Rebuild)
+
+The following are already working — only update/extend them, do not rewrite from scratch:
+
+- ✅ `lib/supabase.ts` — working
+- ✅ `app/api/subscribe/route.ts` — working, tested
+- ✅ `app/page.tsx` — landing page working
+- ✅ `lib/fetchEconomicData.ts` — working but needs history (10 obs)
+- ✅ `lib/fetchNews.ts` — working
+- ✅ `lib/generateInsights.ts` — working but needs expanded output schema
+- ✅ `lib/generatePDF.ts` — working
+- ✅ `templates/reportTemplate.ts` — EXISTS but needs full redesign to 5-page spec
+
+**Priority order:**
+1. Update `fetchEconomicData.ts` to return 10-month history + change calculations
+2. Update `generateInsights.ts` to return the full expanded JSON schema
+3. Rebuild `templates/reportTemplate.ts` to the full 5-page design
+4. Test PDF at `/api/test-pdf`
+5. Build `lib/sendEmail.ts`
+6. Build `app/api/send-brief/route.ts` (full pipeline)
+7. Add `vercel.json` cron config
+8. Deploy to Vercel
