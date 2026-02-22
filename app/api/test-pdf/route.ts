@@ -18,17 +18,6 @@ export async function GET() {
 
     const insights = await generateInsights(economicData, news);
 
-    const economicRows = insights.economicInsights.map((e) => ({
-      item: e.item,
-      value: e.currentValue,
-      insight: e.insight,
-    }));
-    const newsRows = insights.newsInsights.map((n) => ({
-      headline: n.headline,
-      source: n.source,
-      insight: n.insight,
-    }));
-
     const now = new Date();
     const dateFormatted = now.toLocaleDateString("en-US", {
       weekday: "long",
@@ -37,7 +26,7 @@ export async function GET() {
       year: "numeric",
     });
 
-    const html = buildReportHtml(dateFormatted, economicRows, newsRows);
+    const html = buildReportHtml(dateFormatted, economicData, insights);
     const pdfBuffer = await generatePDF(html);
 
     return new NextResponse(pdfBuffer, {
