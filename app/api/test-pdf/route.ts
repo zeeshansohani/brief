@@ -16,21 +16,17 @@ export async function GET() {
       fetchNews(),
     ]);
 
-    const insightInputs = [
-      ...economicData.map((d) => ({ item: d.item, value: d.currentValue })),
-      ...news.map((n) => ({ item: n.headline, value: n.source })),
-    ];
-    const insights = await generateInsights(insightInputs);
+    const insights = await generateInsights(economicData, news);
 
-    const economicRows = economicData.map((d, i) => ({
-      item: d.item,
-      value: d.currentValue,
-      insight: insights[i]?.insight ?? "",
+    const economicRows = insights.economicInsights.map((e) => ({
+      item: e.item,
+      value: e.currentValue,
+      insight: e.insight,
     }));
-    const newsRows = news.map((n, i) => ({
+    const newsRows = insights.newsInsights.map((n) => ({
       headline: n.headline,
       source: n.source,
-      insight: insights[economicData.length + i]?.insight ?? "",
+      insight: n.insight,
     }));
 
     const now = new Date();

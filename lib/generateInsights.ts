@@ -1,51 +1,141 @@
 /**
- * Sends economic data points and news items to OpenAI (GPT-4o-mini) and returns
- * structured insights: { item, value, insight }[].
- * System prompt: concise financial analyst, 2–3 sentences, plain English.
+ * Full AI analysis (single batched GPT-4o-mini call).
+ * Accepts full EconomicSeries (with trend history + change calculations) and news;
+ * returns executiveSummary, economicInsights, marketImpact, newsInsights.
  */
 
 import OpenAI from "openai";
+import type { EconomicSeries } from "@/lib/fetchEconomicData";
 
-const SYSTEM_PROMPT = `You are a concise financial analyst. For each economic data point or news item provided, write exactly 2-3 sentences explaining what this means for everyday investors and the broader economy. Use plain English, no jargon.`;
+const SYSTEM_PROMPT = `You are a senior financial analyst writing a morning briefing for sophisticated investors. Be precise, data-driven, and actionable. Reference specific values. No filler, no generic statements. Every insight must be grounded in the actual data provided.`;
 
-export type InsightInput = {
+export type EconomicInsight = {
   item: string;
-  value: string;
+  currentValue: string;
+  insight: string;
+  trendAnalysis: string;
+  marketImplication: string;
 };
 
-export type InsightItem = {
-  item: string;
-  value: string;
+export type SectorToWatch = {
+  sector: string;
+  reasoning: string;
+  direction: "positive" | "negative" | "neutral";
+};
+
+export type StockToWatch = {
+  ticker: string;
+  company: string;
+  reasoning: string;
+  direction: "positive" | "negative" | "neutral";
+};
+
+export type MarketImpact = {
+  overallOutlook: string;
+  sectorsToWatch: SectorToWatch[];
+  stocksToWatch: StockToWatch[];
+};
+
+export type NewsInsight = {
+  headline: string;
+  source: string;
+  url: string;
   insight: string;
 };
 
+export type FullInsights = {
+  executiveSummary: string;
+  economicInsights: EconomicInsight[];
+  marketImpact: MarketImpact;
+  newsInsights: NewsInsight[];
+};
+
+export type NewsInput = {
+  headline: string;
+  source: string;
+  url: string;
+  publishedAt?: string;
+};
+
+function buildEconomicContext(series: EconomicSeries[]): string {
+  return series
+    .map(
+      (s) =>
+        `[${s.item}]
+  Series ID: ${s.seriesId}
+  Current value: ${s.currentValue} (as of ${s.date})
+  Previous value: ${s.previousValue}
+  Change: ${s.change} (${s.changePct}) — direction: ${s.direction}
+  Unit: ${s.unit} | Frequency: ${s.frequency}
+  Trend (last ${s.trend.length} periods, oldest to newest):
+  ${s.trend.map((t) => `    ${t.date}: ${t.value}`).join("\n")}`
+    )
+    .join("\n\n");
+}
+
+function buildNewsContext(news: NewsInput[]): string {
+  return news
+    .map(
+      (n) =>
+        `- Headline: ${n.headline}\n  Source: ${n.source}\n  URL: ${n.url}${n.publishedAt ? `\n  Published: ${n.publishedAt}` : ""}`
+    )
+    .join("\n\n");
+}
+
+const OUTPUT_SCHEMA = `
+Respond with a single JSON object (no markdown, no extra text) with exactly these keys:
+
+1. "executiveSummary": string — 4-5 sentence macro overview of today's economic picture based on the data.
+
+2. "economicInsights": array of objects, one per economic indicator, each with:
+   - "item": string (indicator name)
+   - "currentValue": string (same value from data)
+   - "insight": string — 2-3 sentences: what this number means
+   - "trendAnalysis": string — 1-2 sentences: what the trend (last 10 periods) shows
+   - "marketImplication": string — 1-2 sentences: direct market impact
+
+3. "marketImpact": object with:
+   - "overallOutlook": string — 3-4 sentences: combined effect of all data on markets
+   - "sectorsToWatch": array of 4-5 objects: { "sector": string, "reasoning": string, "direction": "positive"|"negative"|"neutral" }
+   - "stocksToWatch": array of 5-6 objects: { "ticker": string, "company": string, "reasoning": string, "direction": "positive"|"negative"|"neutral" }
+
+4. "newsInsights": array of objects, one per news article, each with:
+   - "headline": string (same as provided)
+   - "source": string (same as provided)
+   - "url": string (same as provided)
+   - "insight": string — 2-3 sentences on what this means for investors
+`;
+
 export async function generateInsights(
-  inputs: InsightInput[]
-): Promise<InsightItem[]> {
+  economicSeries: EconomicSeries[],
+  news: NewsInput[]
+): Promise<FullInsights> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     throw new Error("OPENAI_API_KEY is not set in environment.");
   }
 
-  if (inputs.length === 0) {
-    return [];
-  }
+  const economicContext = buildEconomicContext(economicSeries);
+  const newsContext = buildNewsContext(news);
+
+  const userContent = `Use the following economic data and news to produce the structured briefing.
+
+=== ECONOMIC DATA ===
+${economicContext || "(No economic data provided)"}
+
+=== NEWS HEADLINES ===
+${newsContext || "(No news provided)"}
+
+${OUTPUT_SCHEMA}`;
 
   try {
     const openai = new OpenAI({ apiKey });
-
-    const userContent = inputs
-      .map((i) => `Item: ${i.item}\nValue: ${i.value}`)
-      .join("\n\n");
 
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
-        {
-          role: "user",
-          content: `For each of the following, provide a short insight (2-3 sentences) in plain English for everyday investors.\n\n${userContent}\n\nRespond with a single JSON object with one key "insights" whose value is an array of objects. Each object must have keys "item", "value", "insight". No other text.`,
-        },
+        { role: "user", content: userContent },
       ],
       response_format: { type: "json_object" },
     });
@@ -55,27 +145,77 @@ export async function generateInsights(
       throw new Error("OpenAI returned empty content.");
     }
 
-    const parsed = JSON.parse(raw) as { insights?: unknown[] };
-    const list = Array.isArray(parsed?.insights) ? parsed.insights : [];
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
 
-    const results: InsightItem[] = [];
-    for (let i = 0; i < list.length; i++) {
-      const entry = list[i];
-      if (entry && typeof entry === "object" && "insight" in entry) {
-        const obj = entry as Record<string, unknown>;
-        results.push({
-          item: typeof obj.item === "string" ? obj.item : inputs[i]?.item ?? "Unknown",
-          value: typeof obj.value === "string" ? obj.value : inputs[i]?.value ?? "",
-          insight: typeof obj.insight === "string" ? obj.insight : "",
-        });
+    const executiveSummary =
+      typeof parsed.executiveSummary === "string"
+        ? parsed.executiveSummary
+        : "";
+
+    const economicInsights: EconomicInsight[] = Array.isArray(parsed.economicInsights)
+      ? (parsed.economicInsights as Record<string, unknown>[]).map((e) => ({
+          item: typeof e.item === "string" ? e.item : "",
+          currentValue: typeof e.currentValue === "string" ? e.currentValue : "",
+          insight: typeof e.insight === "string" ? e.insight : "",
+          trendAnalysis: typeof e.trendAnalysis === "string" ? e.trendAnalysis : "",
+          marketImplication: typeof e.marketImplication === "string" ? e.marketImplication : "",
+        }))
+      : [];
+
+    const marketImpactRaw = parsed.marketImpact;
+    const marketImpact: MarketImpact = {
+      overallOutlook: "",
+      sectorsToWatch: [],
+      stocksToWatch: [],
+    };
+    if (marketImpactRaw && typeof marketImpactRaw === "object") {
+      const m = marketImpactRaw as Record<string, unknown>;
+      marketImpact.overallOutlook =
+        typeof m.overallOutlook === "string" ? m.overallOutlook : "";
+      if (Array.isArray(m.sectorsToWatch)) {
+        marketImpact.sectorsToWatch = (m.sectorsToWatch as Record<string, unknown>[]).map(
+          (s) => ({
+            sector: typeof s.sector === "string" ? s.sector : "",
+            reasoning: typeof s.reasoning === "string" ? s.reasoning : "",
+            direction:
+              s.direction === "positive" || s.direction === "negative" || s.direction === "neutral"
+                ? s.direction
+                : "neutral",
+          })
+        );
+      }
+      if (Array.isArray(m.stocksToWatch)) {
+        marketImpact.stocksToWatch = (m.stocksToWatch as Record<string, unknown>[]).map(
+          (s) => ({
+            ticker: typeof s.ticker === "string" ? s.ticker : "",
+            company: typeof s.company === "string" ? s.company : "",
+            reasoning: typeof s.reasoning === "string" ? s.reasoning : "",
+            direction:
+              s.direction === "positive" || s.direction === "negative" || s.direction === "neutral"
+                ? s.direction
+                : "neutral",
+          })
+        );
       }
     }
 
-    return results;
+    const newsInsights: NewsInsight[] = Array.isArray(parsed.newsInsights)
+      ? (parsed.newsInsights as Record<string, unknown>[]).map((n) => ({
+          headline: typeof n.headline === "string" ? n.headline : "",
+          source: typeof n.source === "string" ? n.source : "",
+          url: typeof n.url === "string" ? n.url : "",
+          insight: typeof n.insight === "string" ? n.insight : "",
+        }))
+      : [];
+
+    return {
+      executiveSummary,
+      economicInsights,
+      marketImpact,
+      newsInsights,
+    };
   } catch (err) {
     console.error("[generateInsights] Error:", err);
     throw err;
   }
 }
-
-// Test: call from a route with sample inputs; result can be console.log'd
