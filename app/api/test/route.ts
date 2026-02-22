@@ -17,7 +17,7 @@ export async function GET() {
     console.log("[api/test] fetchNews result:", JSON.stringify(news, null, 2));
 
     const insightInputs = [
-      ...economicData.map((d) => ({ item: d.item, value: d.value })),
+      ...economicData.map((d) => ({ item: d.item, value: d.currentValue })),
       ...news.map((n) => ({ item: n.headline, value: n.source })),
     ];
     const insights = await generateInsights(insightInputs);
