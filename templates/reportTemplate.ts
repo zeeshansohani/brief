@@ -35,12 +35,35 @@ function directionColor(direction: string): string {
   return COLORS.amber;
 }
 
-/** For CPI/Unemployment/Fed Funds in Key Numbers: up/down meaning good/bad by indicator. */
-function keyMetricColor(seriesId: string, direction: string): string {
+/** Indicator-specific: down = green for unemployment/fed funds (good); up = red for CPI (bad). */
+function economicDirectionColor(seriesId: string, direction: string): string {
   if (direction === "flat") return COLORS.amber;
   if (seriesId === "CPIAUCSL") return direction === "up" ? COLORS.red : COLORS.green;
-  if (seriesId === "UNRATE") return direction === "up" ? COLORS.red : COLORS.green;
-  return direction === "up" ? COLORS.amber : COLORS.green;
+  if (seriesId === "UNRATE" || seriesId === "FEDFUNDS") return direction === "down" ? COLORS.green : COLORS.red;
+  if (seriesId === "GDP" || seriesId === "RSAFS" || seriesId === "UMCSENT") return direction === "up" ? COLORS.green : direction === "down" ? COLORS.red : COLORS.amber;
+  return COLORS.amber;
+}
+
+/** Format FRED raw value for display per PROJECT.md. */
+function formatDisplayValue(seriesId: string, value: string): string {
+  const n = parseFloat(String(value).replace(/,/g, ""));
+  if (Number.isNaN(n)) return value;
+  switch (seriesId) {
+    case "GDP":
+      return `$${n.toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}B`;
+    case "CPIAUCSL":
+      return `${n.toFixed(1)} (Index)`;
+    case "UNRATE":
+      return `${n.toFixed(1)}%`;
+    case "FEDFUNDS":
+      return `${n.toFixed(2)}%`;
+    case "RSAFS":
+      return `$${Math.round(n).toLocaleString("en-US")}M`;
+    case "UMCSENT":
+      return `${n.toFixed(1)} / 100`;
+    default:
+      return value;
+  }
 }
 
 function directionArrow(direction: string): string {
@@ -107,7 +130,7 @@ export function buildReportHtml(
           (s) => `
         <div style="display: table-cell; width: 33.33%; padding: 16px; border-right: 1px solid ${COLORS.border}; vertical-align: top;">
           <div style="font-size: 11px; color: ${COLORS.secondary}; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">${escapeHtml(s.item)}</div>
-          <div style="font-size: 22px; font-weight: 700; color: ${keyMetricColor(s.seriesId, s.direction)};">${escapeHtml(s.currentValue)} ${s.unit === "Percent" ? "%" : ""} <span style="font-size: 14px; font-weight: 600;">${directionArrow(s.direction)}</span></div>
+          <div style="font-size: 22px; font-weight: 700; color: ${economicDirectionColor(s.seriesId, s.direction)};">${escapeHtml(formatDisplayValue(s.seriesId, s.currentValue))} <span style="font-size: 14px; font-weight: 600;">${directionArrow(s.direction)}</span></div>
         </div>`
         )
         .join("")}
@@ -147,7 +170,7 @@ export function buildReportHtml(
       };
       const trendRows = trendWithChanges(series.trend);
       const bg = idx % 2 === 1 ? COLORS.cardAlt : COLORS.bg;
-      const valueColor = series.direction === "up" ? COLORS.green : series.direction === "down" ? COLORS.red : COLORS.amber;
+      const valueColor = economicDirectionColor(series.seriesId, series.direction);
       return `
     <div style="padding: 20px; background: ${bg}; border-bottom: 1px solid ${COLORS.border};">
       <div style="display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap;">
@@ -156,7 +179,7 @@ export function buildReportHtml(
           <div style="font-size: 11px; color: ${COLORS.secondary}; margin-top: 2px;">As of ${escapeHtml(series.date)}</div>
         </div>
         <div style="text-align: right;">
-          <div style="font-size: 28px; font-weight: 700; color: ${valueColor};">${escapeHtml(series.currentValue)}${series.unit === "Percent" ? "%" : ""}</div>
+          <div style="font-size: 28px; font-weight: 700; color: ${valueColor};">${escapeHtml(formatDisplayValue(series.seriesId, series.currentValue))}</div>
           <div style="font-size: 12px; color: ${valueColor};">${directionArrow(series.direction)} ${escapeHtml(series.changePct)} from previous</div>
         </div>
       </div>
@@ -179,7 +202,7 @@ export function buildReportHtml(
                 (r) => `
             <tr style="border-bottom: 1px solid ${COLORS.border};">
               <td style="padding: 6px 8px;">${escapeHtml(formatTrendDate(r.date))}</td>
-              <td style="text-align: right; padding: 6px 8px;">${escapeHtml(r.value)}</td>
+              <td style="text-align: right; padding: 6px 8px;">${escapeHtml(formatDisplayValue(series.seriesId, r.value))}</td>
               <td style="text-align: right; padding: 6px 8px;">${escapeHtml(r.changePct)}</td>
             </tr>`
               )
