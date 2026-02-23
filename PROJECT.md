@@ -35,6 +35,7 @@ The goal: a Bloomberg-lite morning briefing that makes institutional-grade econo
 OPENAI_API_KEY=
 FRED_API_KEY=
 RESEND_API_KEY=
+RESEND_FROM=Brief <hello@yourdomain.com>   # verified sender in Resend
 NEWS_API_KEY=
 SUPABASE_URL=
 SUPABASE_ANON_KEY=
